@@ -1,7 +1,7 @@
 {
   "name": "dictation-turbo",
-  "version": "0.1.0",
-  "description": "双击 Control 键 = 点一下 DSH 输入框下方的语音输入麦克风（开始 / 停止听写）",
+  "version": "0.2.0",
+  "description": "双击 Control 说话，文字落进 DSH 输入框；中文/德语/英文自动换引擎，不用切输入法",
   "author": "Jie Da",
   "type": "module",
   "license": "MIT",
@@ -11,7 +11,10 @@
     "dictation",
     "speech-to-text",
     "voice-input",
-    "hotkey"
+    "hotkey",
+    "multilingual",
+    "german",
+    "accessibility"
   ],
   "main": "lib/index.js",
   "exports": {
