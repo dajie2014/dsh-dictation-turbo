@@ -2,6 +2,7 @@
   "name": "dictation-turbo",
   "version": "0.1.0",
   "description": "双击 Control 键 = 点一下 DSH 输入框下方的语音输入麦克风（开始 / 停止听写）",
+  "author": "Jie Da",
   "type": "module",
   "license": "MIT",
   "keywords": [
