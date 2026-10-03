@@ -1,0 +1,38 @@
+{
+  "name": "dictation-turbo",
+  "version": "0.1.0",
+  "description": "双击 Control 键 = 点一下 DSH 输入框下方的语音输入麦克风（开始 / 停止听写）",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dictation",
+    "speech-to-text",
+    "voice-input",
+    "hotkey"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  }
+}
