@@ -1,25 +1,25 @@
 /* eslint-disable */
 /**
- * dsh-ctrl-dictate — 浏览器半体。
+ * dsh-ctrl-dictate — 浏览器半体（v4：双引擎）
  *
- * 它只做一件事：**双击 Control 键，代替鼠标去点输入框下方那个语音输入麦克风。**
+ * **双击 Control 说话，文字落进输入框。**
  *
- *   · 空闲时双击 → 点击麦克风「开始听写」（等价于点一下那颗按钮）
- *   · 录音中双击 → 点击录音栏里的「停止」（等价于点停止：结束录音并转写进草稿）
+ *   · 空闲时双击 → 开始录音（右下角出现一条小提示：红点 + 秒数 + 电平）
+ *   · 录音中双击 → 结束、识别、把字落进输入框
+ *   · Option + 双击 → 只测「落字」这一段（不录音），用来排查"识别对了但字没进去"
  *
- * 为什么是「点按钮」而不是直接调录音接口：
- * 麦克风是官方实验插件 @deepseek-ai/dsh-experimental-client-ui-voice-input 自己的
- * 内部状态（React 本地状态 + MediaRecorder），没有对外接口。它渲染的按钮带
- * `onClick`，用 DOM 的 click() 触发与真手点同一条代码路径 —— 这是最稳定的接法，
- * 也正是 dsh-search 那个插件在用的路子（纯 DOM、无构建步骤）。
+ * 两只耳朵：
+ *   · 中英 → DSH 自己的 SenseVoice（简体、全角标点，中文更准）
+ *   · 德语及其余长尾 → VoiceStudio（本机 3900，646 种语言）
+ *   怎么分工：先让 VoiceStudio 听（它自带语言检测），听出来是中文就换 DSH 重听一遍。
+ *   为什么不能反过来：SenseVoice 不认识德语时**不报错**，而是硬猜成中文或英文。
  *
- * 三个刻意的设计：
- *   1. 只在**输入框获得焦点**时响应。否则「控件键双击」会跑到应用外面去
- *      （文件对话框那种），那不是用户要的。
- *   2. 两次 Control 之间**按过别的键就不算双击** —— 避免一边打字一边误触。
- *   3. 不用按钮上的文字（中文/英文会变），只用**稳定的类名后缀**
- *      （`_trigger` / `_captureRow` / `_roundButton`）和图标名定位。
+ * 与前几版的关系：
+ *   v3 只是"替鼠标去点官方的麦克风按钮"，引擎是官方那一个（SenseVoice，只认 5 种语言）。
+ *   v4 自己录、自己选引擎、自己落字 —— 所以德语才走得通。
+ *   官方那条路仍留着：如果官方录音条正在录，双击会去点它的「停止」（免得卡住）。
  */
+
 window.__ModuleLoader__.load({
   id: 'dictation-turbo',
   factory: (require) => {
@@ -30,98 +30,579 @@ window.__ModuleLoader__.load({
     /** 两次 Control 之间的最长间隔（毫秒），超过就算两次单击。 */
     const DOUBLE_TAP_MS = 400
     /** 提示气泡停留时长。 */
-    const TOAST_MS = 1800
+    const TOAST_MS = 2600
+    /** 最短录音：比这短当误触丢掉。 */
+    const MIN_SECONDS = 0.35
+    /** 全程最响都没到这个音量，就不送识别（静音送进去一定会被硬猜出东西）。 */
+    const MIN_PEAK = 0.02
+    /** 最长录这么久强制收工（秒）。 */
+    const MAX_SECONDS = 120
+    /** 送识别一律 16 kHz 单声道 —— DSH 那个接口只收这种。 */
+    const RATE = 16000
+    /** VoiceStudio 本机地址。 */
+    const VS_BASE = 'http://127.0.0.1:3900'
+    /** 要不要让 VoiceStudio 用本地大模型润色（更通顺，但要多等几秒）。 */
+    const VS_REFINE = false
 
     /* ============================ 样式 ============================ */
 
     const CSS = [
-      // 右下角的一行小提示：不做成大弹窗，只是告诉用户「触发了什么」。
-      '.cd_toast{position:fixed;right:22px;bottom:22px;z-index:1400;max-width:320px;padding:9px 14px;border-radius:10px;',
+      // 右下角提示气泡
+      '.dt_toast{position:fixed;right:22px;bottom:22px;z-index:1400;max-width:340px;padding:9px 14px;border-radius:10px;',
       'background:var(--dsw-alias-bg-layer-2,rgba(32,32,34,.92));color:var(--dsw-alias-label-primary,#fff);',
       'border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.16));box-shadow:var(--dsw-shadow-lv3,0 8px 24px rgba(0,0,0,.28));',
       'font-size:13px;line-height:1.5;font-family:inherit;pointer-events:none;}',
-      // 临时诊断条：显示「最近一次双击看见了什么」，方便远程排查（查完就删）。
-      '.cd_diag{position:fixed;left:22px;bottom:22px;z-index:1400;max-width:460px;padding:8px 12px;border-radius:10px;',
+      // 录音中那条：红点 + 秒数 + 电平
+      '.dt_rec{position:fixed;right:22px;bottom:22px;z-index:1400;display:flex;align-items:center;gap:9px;padding:9px 14px;border-radius:10px;',
+      'background:var(--dsw-alias-bg-layer-2,rgba(32,32,34,.94));color:var(--dsw-alias-label-primary,#fff);',
+      'border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.16));box-shadow:var(--dsw-shadow-lv3,0 8px 24px rgba(0,0,0,.28));',
+      'font-size:13px;font-family:inherit;pointer-events:none;}',
+      '.dt_dot{width:9px;height:9px;border-radius:50%;background:#ff4d4f;animation:dt_blink 1s ease-in-out infinite;}',
+      '@keyframes dt_blink{0%,100%{opacity:1}50%{opacity:.25}}',
+      '.dt_time{font-variant-numeric:tabular-nums;min-width:38px;}',
+      '.dt_meter{width:70px;height:6px;border-radius:3px;background:rgba(255,255,255,.16);overflow:hidden;}',
+      '.dt_meter>i{display:block;height:100%;width:0%;background:#4ade80;transition:width .08s linear;}',
+      '.dt_hint{opacity:.7;font-size:12px;}',
+      // 诊断条（开发期用；查完关掉 diag() 里那行 return 即可）
+      '.dt_diag{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:1500;max-width:min(780px,94vw);padding:8px 12px;border-radius:10px;',
       'background:var(--dsw-alias-bg-layer-2,rgba(32,32,34,.92));color:var(--dsw-alias-label-primary,#fff);',
       'border:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.16));font-size:12px;line-height:1.55;',
       'font-family:inherit;pointer-events:none;white-space:pre-wrap;}',
     ].join('')
 
-    /* ============================ DOM 工具 ============================ */
+    /* ============================ 小工具 ============================ */
 
     const $$ = (selector, root) => Array.from((root || document).querySelectorAll(selector))
 
-    /**
-     * 麦克风按钮：class 形如 `CIpuWG_trigger`。
-     * 用 `*="_trigger"` 而不是写死 `CIpuWG_` —— 那个前缀是构建时生成的哈希，会随版本变。
-     */
-    function micButton() {
-      // ① 最准：语音输入插件把自己的按钮套在一个叫 xxx_triggerAnchor 的容器里。
-      //    这个锚点是它独有的，别的插件的按钮不会用。
-      for (const anchor of $$('[class*="_triggerAnchor"]')) {
-        const b = anchor.querySelector('button')
-        if (b && !b.closest('[role="dialog"]')) return b
-      }
-      // ② 兜底：按无障碍标签（中英文都认）
-      for (const b of $$('button[aria-label]')) {
-        const label = (b.getAttribute('aria-label') || '').trim()
-        if (/^(开始听写|开始录音|语音输入|Start dictation|Start recording)$/i.test(label)) return b
-      }
-      // ③ 最后兜底：_trigger 里挑一个「不是菜单类」的按钮。
-      //    ★ 必须排除 aria-haspopup —— 账号菜单那类按钮就是靠这个露馅的
-      //    （2026-10-03 实际踩到：只按 _trigger 匹配，抓到了右上角账号菜单）。
-      for (const b of $$('button[class*="_trigger"]')) {
-        if (b.closest('[role="dialog"]')) continue
-        if (b.hasAttribute('aria-haspopup')) continue
-        return b
-      }
-      return null
+    /** 毫秒 → 0:03 这种样子 */
+    function clock(ms) {
+      const s = Math.floor(ms / 1000)
+      return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0')
     }
 
-    /** 录音栏是否已经展开 —— 展开就有 `CIpuWG_captureRow` 这个容器。 */
-    function recordingBar() {
-      return document.querySelector('[class*="_captureRow"]')
+    /** 字节 → base64（分块，不然一次展开几百万个参数会爆栈） */
+    function toBase64(bytes) {
+      let out = ''
+      const CH = 0x8000
+      for (let i = 0; i < bytes.length; i += CH) {
+        out += String.fromCharCode.apply(null, bytes.subarray(i, i + CH))
+      }
+      return btoa(out)
     }
 
-    /**
-     * 录音栏里的**停止**按钮。
-     *
-     * ★★ 2026-10-03 找到的真凶：
-     *   录音栏里有**两个**圆按钮——左边是「取消 / 丢弃」（✕），右边才是「停止」（■），
-     *   两者共用同一个 `_roundButton` 样式类。
-     *   原来的写法 `querySelector('button[class*="_roundButton"]')` 取到的是
-     *   **第一个＝取消**，于是"再双击一次停止"实际是在**把整段录音丢掉**。
-     *
-     *   这解释了此前所有怪异现象：波形有声音（录音确实在进行）、没有字（被丢了）、
-     *   没有报错（取消不报错）、重采样探针抓不到（取消那条路根本不走转码这一步）。
-     */
-    function stopButton() {
-      const row = recordingBar()
-      if (!row) return null
-      // ① 最准：按无障碍标签认「停止」
-      for (const b of Array.from(row.querySelectorAll('button'))) {
-        const label = (b.getAttribute('aria-label') || '').trim()
-        if (/^(停止|结束|Stop)$/i.test(label)) return b
+    /* ============================ 提示 ============================ */
+
+    let toastEl = null
+    let toastTimer = null
+
+    function toast(text) {
+      if (!toastEl) {
+        toastEl = document.createElement('div')
+        toastEl.className = 'dt_toast'
+        document.body.appendChild(toastEl)
       }
-      // ② 兜底：从右往左找圆按钮，跳过「取消 / 丢弃」那种
-      const rounds = Array.from(row.querySelectorAll('button[class*="_roundButton"]'))
-      for (let i = rounds.length - 1; i >= 0; i--) {
-        const label = (rounds[i].getAttribute('aria-label') || '').trim()
-        if (!/取消|丢弃|关闭|cancel|discard|close/i.test(label)) return rounds[i]
-      }
-      return null
+      toastEl.textContent = text
+      if (toastTimer) clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => {
+        if (toastEl) toastEl.remove()
+        toastEl = null
+        toastTimer = null
+      }, TOAST_MS)
     }
 
     /**
-     * 像真鼠标那样点一下。
-     *
-     * ★ 2026-10-03 的关键教训：**`el.click()` 对这种按钮无效**。
-     *   真鼠标点击是「pointerdown → mousedown → pointerup → mouseup → click」
-     *   一整串；而 `el.click()` 只发最后那个 `click`。
-     *   界面里的 Button 是靠「按下去/抬起来」驱动 onClick 的（为了按压反馈），
-     *   所以只发 click 它一律不理 —— 用户看到的现象就是「按了没反应」。
-     *   实测：鼠标手点能出录音条，`el.click()` 不能。
+     * 轻提示音。为什么要有：靠听写输入的人（尤其看不见屏幕的）没法盯着右下角那条小字，
+     * 得靠声音知道"开始录了 / 结束了 / 没成"。三个音高各不相同。
      */
+    function chime(kind) {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext
+        if (!AC) return
+        const ac = new AC()
+        const osc = ac.createOscillator()
+        const gain = ac.createGain()
+        osc.type = 'sine'
+        osc.frequency.value = kind === 'start' ? 880 : (kind === 'ok' ? 660 : 320)
+        gain.gain.value = 0.06
+        osc.connect(gain)
+        gain.connect(ac.destination)
+        osc.start()
+        gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.12)
+        osc.stop(ac.currentTime + 0.15)
+        setTimeout(() => { try { ac.close() } catch (e) { /* 忽略 */ } }, 500)
+      } catch (e) { /* 忽略 */ }
+    }
+
+    let diagEl = null
+    let diagLines = []
+    let diagHideTimer = null
+    /** 诊断条：**累积**最近几条 —— 截图一次就能看到连着试的几下，而不只是最后一次。 */
+    function diag(text) {
+      if (!diagEl) {
+        diagEl = document.createElement('div')
+        diagEl.className = 'dt_diag'
+        document.body.appendChild(diagEl)
+      }
+      const stamp = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+      diagLines.push(stamp + '  ' + text)
+      if (diagLines.length > 10) diagLines = diagLines.slice(-10)
+      diagEl.textContent = diagLines.join('\n')
+      // 说完了就自己走开：日常不该有一行字常驻在屏幕顶上
+      if (diagHideTimer) clearTimeout(diagHideTimer)
+      diagHideTimer = setTimeout(() => {
+        if (diagEl) diagEl.remove()
+        diagEl = null
+        diagLines = []
+      }, 20000)
+    }
+
+    /* ============================ 录音条 ============================ */
+
+    let recEl = null
+    let recTimer = null
+    let recMeter = null
+
+    function showRecBar() {
+      hideRecBar()
+      recEl = document.createElement('div')
+      recEl.className = 'dt_rec'
+      recEl.innerHTML = '<span class="dt_dot"></span><span class="dt_time">0:00</span>'
+        + '<span class="dt_meter"><i></i></span><span class="dt_hint">再双击 Control 结束</span>'
+      document.body.appendChild(recEl)
+      recMeter = recEl.querySelector('i')
+    }
+
+    function hideRecBar() {
+      if (recTimer) { clearInterval(recTimer); recTimer = null }
+      if (recEl) { recEl.remove(); recEl = null }
+      recMeter = null
+    }
+
+    /* ============================ 录音 ============================ */
+
+    let live = null // { rec, stream, chunks, t0, analyser, raf, peak }
+
+    function canRecord() {
+      return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)
+    }
+
+    async function beginRecording() {
+      if (live) return
+      if (!canRecord()) { toast('⚠️ 这个环境不支持录音'); return }
+      // 先响再开录：这一声要是被自己录进去，偶尔会被识别成莫名其妙的字
+      chime('start')
+      await sleep(180)
+      let stream
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          // autoGainControl 关掉：它会把小声放大到贴顶（诊断里的"峰值 1.00"就是这么来的），
+          // 削波会伤识别。全系统版没这个处理，录出来的峰值一直很温和。
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+        })
+      } catch (e) {
+        toast('⚠️ 拿不到麦克风：' + (e && e.message ? e.message : e))
+        return
+      }
+      const chunks = []
+      let rec
+      try {
+        rec = new MediaRecorder(stream)
+      } catch (e) {
+        stream.getTracks().forEach((t) => t.stop())
+        toast('⚠️ 录音机起不来：' + (e && e.message ? e.message : e))
+        return
+      }
+      rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data) }
+      rec.start(200)
+
+      // 电平：让"到底有没有声音"变成看得见的一件事
+      const ac = new (window.AudioContext || window.webkitAudioContext)()
+      const src = ac.createMediaStreamSource(stream)
+      const analyser = ac.createAnalyser()
+      analyser.fftSize = 1024
+      src.connect(analyser)
+      const buf = new Float32Array(analyser.fftSize)
+
+      live = { rec, stream, chunks, t0: Date.now(), ac, analyser, peak: 0 }
+      showRecBar()
+
+      recTimer = setInterval(() => {
+        if (!live) return
+        const ms = Date.now() - live.t0
+        const timeEl = recEl && recEl.querySelector('.dt_time')
+        if (timeEl) timeEl.textContent = clock(ms)
+        try {
+          live.analyser.getFloatTimeDomainData(buf)
+          let p = 0
+          for (let i = 0; i < buf.length; i++) {
+            const v = Math.abs(buf[i])
+            if (v > p) p = v
+          }
+          if (p > live.peak) live.peak = p
+          if (recMeter) recMeter.style.width = Math.min(100, Math.round(p * 140)) + '%'
+        } catch (e) { /* 忽略 */ }
+        if (ms > MAX_SECONDS * 1000) stopRecording() // 忘了关就自动收工
+      }, 100)
+    }
+
+    async function stopRecording() {
+      if (!live) return
+      const { rec, stream, chunks, t0, ac, peak } = live
+      live = null
+      const blob = await new Promise((resolve) => {
+        try {
+          rec.onstop = () => resolve(new Blob(chunks, { type: (chunks[0] && chunks[0].type) || 'audio/webm' }))
+          rec.stop()
+          // 万一 onstop 不来，别把用户卡住
+          setTimeout(() => resolve(new Blob(chunks, { type: (chunks[0] && chunks[0].type) || 'audio/webm' })), 1500)
+        } catch (e) {
+          resolve(new Blob(chunks, { type: (chunks[0] && chunks[0].type) || 'audio/webm' }))
+        }
+      })
+      stream.getTracks().forEach((t) => t.stop())
+      try { await ac.close() } catch (e) { /* 忽略 */ }
+      hideRecBar()
+
+      const seconds = (Date.now() - t0) / 1000
+      if (seconds < MIN_SECONDS || !blob.size) {
+        diag('录得太短（' + seconds.toFixed(2) + ' 秒），当误触丢掉')
+        return
+      }
+      if (peak < MIN_PEAK) {
+        // 静音/只有底噪时别送识别 —— 送进去一定会被硬猜出一句莫名其妙的话
+        diag('没听到声音（峰值 ' + peak.toFixed(3) + '），跳过识别')
+        toast('🔇 没听到声音，没说就没送识别')
+        return
+      }
+      toast('⏳ 正在识别…')
+      diag('录音 ' + seconds.toFixed(1) + ' 秒 / 峰值 ' + peak.toFixed(2) + '　正在识别…')
+      await transcribeAndInsert(blob, seconds, peak)
+    }
+
+    /* ============================ 音频 → 16k 单声道 WAV ============================ */
+
+    /** 浏览器录的是 webm/opus，先解码，再重采样到 16 kHz 单声道，最后手写 RIFF 头。 */
+    async function toWav(blob) {
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      const AC = window.AudioContext || window.webkitAudioContext
+      const ac = new AC()
+      let decoded
+      try {
+        decoded = await ac.decodeAudioData(bytes.buffer.slice(0))
+      } finally {
+        try { await ac.close() } catch (e) { /* 忽略 */ }
+      }
+      const frames = Math.max(1, Math.ceil(decoded.duration * RATE))
+      const off = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, frames, RATE)
+      const src = off.createBufferSource()
+      src.buffer = decoded
+      src.connect(off.destination)
+      src.start()
+      const rendered = await off.startRendering()
+      const f32 = rendered.getChannelData(0)
+
+      // Float32 → PCM16
+      const pcm = new Uint8Array(f32.length * 2)
+      let k = 0
+      for (let i = 0; i < f32.length; i++) {
+        let s = f32[i]
+        if (s > 1) s = 1; else if (s < -1) s = -1
+        const v = s < 0 ? s * 0x8000 : s * 0x7fff
+        const n = v | 0
+        pcm[k++] = n & 0xff
+        pcm[k++] = (n >> 8) & 0xff
+      }
+
+      // 只有 RIFF + fmt + data 三个块。
+      // 为什么不用现成工具转：那些会塞 LIST/FLLR 之类的附加块，DSH 的接口会直接拒收。
+      const head = new Uint8Array(44)
+      const dv = new DataView(head.buffer)
+      const put = (at, str) => { for (let i = 0; i < str.length; i++) head[at + i] = str.charCodeAt(i) }
+      put(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length, true); put(8, 'WAVE')
+      put(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true)
+      dv.setUint32(24, RATE, true); dv.setUint32(28, RATE * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true)
+      put(36, 'data'); dv.setUint32(40, pcm.length, true)
+
+      const wav = new Uint8Array(head.length + pcm.length)
+      wav.set(head, 0)
+      wav.set(pcm, head.length)
+      return wav
+    }
+
+    /* ============================ 两只耳朵 ============================ */
+
+    /** DSH 自己的识别（SenseVoice）。跟页面同源，直接发，不用管跨域。 */
+    async function askDSH(wav) {
+      const body = {
+        type: 'client-request',
+        rpcId: (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())),
+        method: 'speech/transcribe',
+        payload: { args: { request: { audioBase64: toBase64(wav) } } },
+      }
+      const res = await fetch('/api/speech/transcribe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const env = await res.json()
+      if (env && env.result && env.result.ok && env.result.value) {
+        return { text: String(env.result.value.text || '') }
+      }
+      const e = env && env.result && env.result.error
+      throw new Error('DSH：' + (e ? (e.code + ' ' + e.message) : ('HTTP ' + res.status)))
+    }
+
+    /** VoiceStudio（本机 3900）。它自带语言检测，德语就在这条路上。 */
+    async function askVoiceStudio(wav) {
+      const form = new FormData()
+      form.append('audio', new Blob([wav], { type: 'audio/wav' }), 'a.wav')
+      form.append('mode', 'fast')
+      form.append('dictation', 'true') // 用他保存的听写词表（专有名词更准）
+      if (VS_REFINE) form.append('refine', 'true')
+      const res = await fetch(VS_BASE + '/transcribe', { method: 'POST', body: form })
+      if (!res.ok) throw new Error('VoiceStudio：HTTP ' + res.status)
+      const obj = await res.json()
+      return { text: String(obj.text || ''), lang: obj.language || '', engine: obj.engine || '' }
+    }
+
+    /** 含汉字的比例够高就算说的是中文（跟全系统版同一套判据）。 */
+    function looksChinese(text) {
+      let han = 0
+      let letters = 0
+      for (const ch of text) {
+        const c = ch.codePointAt(0)
+        if (c >= 0x4e00 && c <= 0x9fff) han++
+        if (/\p{L}/u.test(ch)) letters++
+      }
+      if (!letters) return false
+      return han / letters > 0.4
+    }
+
+    /** 先 VoiceStudio 探语言：中文 → 换 DSH 重听；其他 → 就用 VoiceStudio。 */
+    async function route(wav) {
+      const notes = []
+      let vs = null
+      try {
+        vs = await askVoiceStudio(wav)
+      } catch (e) {
+        notes.push('VoiceStudio: ' + (e && e.message ? e.message : e))
+      }
+      const vsText = vs && vs.text ? vs.text.trim() : ''
+      if (!vsText) notes.push(vs ? 'VoiceStudio 听出空结果' : 'VoiceStudio 没接上')
+      if (vsText && looksChinese(vsText)) {
+        try {
+          const d = await askDSH(wav)
+          const t = (d.text || '').trim()
+          if (t) return { text: t, who: 'DSH', notes }
+        } catch (e) {
+          notes.push('DSH: ' + (e && e.message ? e.message : e))
+        }
+        return { text: vsText, who: 'VoiceStudio（DSH 没接上）', lang: vs.lang, notes }
+      }
+      if (vsText) return { text: vsText, who: 'VoiceStudio', lang: vs.lang, notes }
+      // VoiceStudio 没开或没结果 → 全交给 DSH
+      try {
+        const d = await askDSH(wav)
+        return { text: (d.text || '').trim(), who: 'DSH', notes }
+      } catch (e) {
+        notes.push('DSH: ' + (e && e.message ? e.message : e))
+        throw new Error(notes.join(' ｜ '))
+      }
+    }
+
+    /* ============================ 把字落进输入框 ============================ */
+
+    /** 找输入框：可见、够大、不在弹窗里的 textarea / 可编辑区，取最靠下的那个。 */
+    function composerEl() {
+      // 最准：焦点本来就在输入框里（我们自录音，不会像官方那样把焦点带走）
+      const act = document.activeElement
+      if (act && act !== document.body && !act.closest('[role="dialog"]')) {
+        const tag = act.tagName
+        if (tag === 'TEXTAREA') return act
+        if (tag === 'INPUT') {
+          const t = (act.getAttribute('type') || 'text').toLowerCase()
+          if (['text', 'search', 'url', 'email', 'password', ''].includes(t)) return act
+        }
+        if (act.isContentEditable === true) return act
+      }
+      const cands = [
+        ...$$('textarea'),
+        ...$$('[contenteditable="true"]'),
+        ...$$('[role="textbox"]'),
+      ].filter((el) => {
+        if (el.closest('[role="dialog"]')) return false
+        const r = el.getBoundingClientRect()
+        if (r.width < 120 || r.height < 12) return false
+        const cs = getComputedStyle(el)
+        if (cs.visibility === 'hidden' || cs.display === 'none') return false
+        return true
+      })
+      cands.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)
+      return cands[0] || null
+    }
+
+    function readValue(el) {
+      if (!el) return ''
+      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') return el.value || ''
+      return el.textContent || ''
+    }
+
+    /**
+     * 落字。三条路依次试，谁成算谁：
+     *   ① 编辑命令 insertText —— 最通用（textarea 和可编辑区都认），走的是浏览器原生编辑，
+     *      界面框架能收到正常的输入事件，中文/德语都不会被输入法截走。
+     *   ② 直接改值 —— 给受控输入框用：调原型上的 setter 绕开框架的"值追踪"，再手动派发 input。
+     *   ③ 复制到剪贴板 —— 前两条都不行时兜底，告诉他按一次 ⌘V。
+     */
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+    /** 把光标放到编辑区末尾 —— 选区不在这个框里，编辑命令会作用到别处（等于没插）。 */
+    function caretToEnd(el) {
+      try {
+        if (!(el.isContentEditable || el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) return
+        el.focus()
+        const sel = window.getSelection()
+        if (!sel) return
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        range.collapse(false)
+        sel.removeAllRanges()
+        sel.addRange(range)
+      } catch (e) { /* 忽略 */ }
+    }
+
+    async function insertText(text) {
+      const el = composerEl()
+      if (!el) return { ok: false, how: '没找到输入框' }
+      caretToEnd(el)
+      const before = readValue(el)
+
+      // ① 编辑命令：textarea 与可编辑区都认，走的是浏览器原生编辑
+      try { document.execCommand('insertText', false, text) } catch (e) { /* 换下一条 */ }
+      await sleep(40)
+      if (readValue(el) !== before) return { ok: true, how: '编辑命令', el }
+
+      // ② 伪造一次粘贴：富文本编辑器基本都监听 paste —— 比硬改 DOM 更"正"
+      try {
+        const dt = new DataTransfer()
+        dt.setData('text/plain', text)
+        el.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }))
+      } catch (e) { /* 换下一条 */ }
+      await sleep(90)
+      if (readValue(el) !== before) return { ok: true, how: '粘贴事件', el }
+
+      // ③ 直接改值（普通受控输入框）：调原型上的 setter 绕开框架的值追踪，再派发 input
+      try {
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value').set
+          setter.call(el, before + text)
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          await sleep(40)
+          if (readValue(el) !== before) return { ok: true, how: '直接改值', el }
+        }
+      } catch (e) { /* 换下一条 */ }
+
+      // ④ 剪贴板兜底：至少别让这句话白说
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text)
+          return { ok: false, how: '已复制到剪贴板（按 ⌘V 贴上）' }
+        }
+      } catch (e) { /* 忽略 */ }
+      return { ok: false, how: '四条路都没成' }
+    }
+
+    /* ============================ 自检（排查用） ============================ */
+
+    /**
+     * 一次把该看的都看一遍：输入框认不认得、落字走哪条路、VoiceStudio 通不通、DSH 通不通。
+     * 为什么 VoiceStudio 分三层测：网络不通 / 通了但被跨源规则挡 / 通了但接口不吃这个请求
+     * —— 三种毛病三种修法，不分开测就只能瞎猜。
+     */
+    async function selfCheck(withInsert) {
+      const out = []
+      const el = composerEl()
+      out.push('输入框=' + (el
+        ? el.tagName + (el.isContentEditable ? '/可编辑' : '') + (el.className ? '.' + String(el.className).split(' ')[0] : '')
+        : '没找到'))
+      out.push('地址=' + location.origin + '｜浏览器=' + ((String(navigator.userAgent).match(/(Chrome|Electron)\/[\d.]+/g) || []).join(' ')))
+      out.push('落字=' + (withInsert ? (await insertText('这是落字测试，一二三四五。')).how : '（未测）'))
+
+      // VoiceStudio：直接打真接口，发一段故意不合法的音频。
+      // 判据是"能不能拿到 HTTP 状态码" —— 400/500 都算通（网络与跨源都过了，只是音频不合法）。
+      // ⚠️ 别拿首页 HTML 去测跨源：那个响应不带跨源头，会误报成"被挡"（2026-10-03 踩过）。
+      try {
+        const form = new FormData()
+        form.append('audio', new Blob([new Uint8Array([0, 0])], { type: 'audio/wav' }), 'x.wav')
+        form.append('mode', 'fast')
+        const r = await fetch(VS_BASE + '/transcribe', { method: 'POST', body: form })
+        out.push('VS=通（HTTP ' + r.status + (r.status === 200 ? '）' : '；非 200 是因为自检发的是假音频）'))
+      } catch (e) {
+        out.push('VS=被挡（' + (e && e.message ? e.message : e) + '）')
+      }
+      // ④ DSH
+      try {
+        const r = await fetch('/api/speech/catalog', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            type: 'client-request', rpcId: String(Date.now()),
+            method: 'speech/catalog', payload: { args: {} },
+          }),
+        })
+        const env = await r.json()
+        out.push('DSH=' + (env && env.result && env.result.ok ? '通' : '异常 HTTP ' + r.status))
+      } catch (e) {
+        out.push('DSH=失败（' + (e && e.message ? e.message : e) + '）')
+      }
+      diag(out.join('\n'))
+    }
+
+    /* ============================ 主流程 ============================ */
+
+    async function transcribeAndInsert(blob, seconds, peak) {
+      let wav
+      try {
+        wav = await toWav(blob)
+      } catch (e) {
+        diag('音频转码失败：' + e)
+        toast('⚠️ 音频转码失败')
+        return
+      }
+      const t0 = Date.now()
+      let out
+      try {
+        out = await route(wav)
+      } catch (e) {
+        chime('low')
+        diag('识别失败：' + e)
+        toast('⚠️ 没接上引擎（' + (e && e.message ? e.message : e) + '）')
+        return
+      }
+      const dt = ((Date.now() - t0) / 1000).toFixed(1)
+      const text = (out.text || '').trim()
+      if (!text) {
+        chime('low')
+        diag('引擎没听出字（' + out.who + '，' + dt + ' 秒）')
+        toast('🤔 没听出内容')
+        return
+      }
+      const put = await insertText(text)
+      chime(put.ok ? 'ok' : 'low')
+      diag('录 ' + seconds.toFixed(1) + ' 秒/峰值 ' + peak.toFixed(2)
+        + ' | [' + out.who + (out.lang ? ' ' + out.lang : '') + '] ' + dt + ' 秒'
+        + (peak > 0.97 ? '（音量可能爆了）' : '')
+        + ' | 落字=' + put.how
+        + (out.notes && out.notes.length ? ' | 旁注=' + out.notes.join('；') : '')
+        + '\n    ' + text.slice(0, 100))
+      toast(put.ok
+        ? '✅ ' + out.who + '　' + dt + ' 秒'
+        : '⚠️ ' + put.how)
+    }
+
+    /* ============================ 官方那条路（保留兜底） ============================ */
+
     function realClick(el) {
       if (!el) return
       try { el.scrollIntoView({ block: 'nearest' }) } catch (e) { /* 忽略 */ }
@@ -132,10 +613,7 @@ window.__ModuleLoader__.load({
         bubbles: true, cancelable: true, composed: true, view: window,
         clientX: cx, clientY: cy, screenX: cx, screenY: cy, button: 0, detail: 1,
       }
-      const pointer = {
-        ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true,
-        width: 1, height: 1, pressure: 0.5,
-      }
+      const pointer = { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1, pressure: 0.5 }
       const fire = (target, type, init) => {
         const isPointer = type.startsWith('pointer')
         const Ctor = isPointer ? (window.PointerEvent || window.MouseEvent) : window.MouseEvent
@@ -150,310 +628,93 @@ window.__ModuleLoader__.load({
       fire(el, 'click', { ...base, buttons: 0 })
     }
 
-    /* ============================ 提示气泡 ============================ */
-
-    let toastEl = null
-    let toastTimer = null
-
-    function toast(text) {
-      if (!toastEl) {
-        toastEl = document.createElement('div')
-        toastEl.className = 'cd_toast'
-        document.body.appendChild(toastEl)
-      }
-      toastEl.textContent = text
-      if (toastTimer) clearTimeout(toastTimer)
-      toastTimer = setTimeout(() => {
-        if (toastEl) toastEl.remove()
-        toastEl = null
-        toastTimer = null
-      }, TOAST_MS)
+    /** 官方录音条在不在（它一展开就有这个容器）。 */
+    function recordingBar() {
+      return document.querySelector('[class*="_captureRow"]')
     }
 
-    /**
-     * 诊断输出 —— **已下线**。
-     * 2026-10-03 功能验证通过后关掉；留着函数是为了不再改动调用点。
-     * 要重新排查时，把下面这行 return 去掉即可恢复界面上的诊断条。
-     */
-    function diag(text) {
-      void text
-      return
+    /** 官方录音条里那个「停止」（最右边那个圆按钮，别拿成左边的取消）。 */
+    function stopButton() {
+      const row = recordingBar()
+      if (!row) return null
+      for (const b of Array.from(row.querySelectorAll('button'))) {
+        const label = (b.getAttribute('aria-label') || '').trim()
+        if (/^(停止|结束|Stop)$/i.test(label)) return b
+      }
+      const rounds = Array.from(row.querySelectorAll('button[class*="_roundButton"]'))
+      for (let i = rounds.length - 1; i >= 0; i--) {
+        const label = (rounds[i].getAttribute('aria-label') || '').trim()
+        if (!/取消|丢弃|关闭|cancel|discard|close/i.test(label)) return rounds[i]
+      }
+      return null
     }
 
     /* ============================ 键盘状态机 ============================ */
 
     let lastCtrlAt = 0
-    let broken = false // 两次 Control 之间按过别的键
+    let broken = false
     let tapTimer = null
+    let altPending = false
 
-    /** 输入框有没有焦点（右键菜单/弹窗里不算）。 */
-    function editorFocused() {
-      const el = document.activeElement
-      if (!el || el === document.body) return false
-      const tag = el.tagName
-      if (tag === 'TEXTAREA') return true
-      if (tag === 'INPUT') {
-        const type = (el.getAttribute('type') || 'text').toLowerCase()
-        return ['text', 'search', 'url', 'email', 'password', ''].includes(type)
+    function handleToggle(alt) {
+      // Option + 双击 = 只测落字，不录音
+      if (alt) {
+        toast('🔧 自检中…')
+        selfCheck(true)
+        return
       }
-      return el.isContentEditable === true
-    }
-
-    function handleToggle() {
-      // 诊断：先把现场情况记下来（找到几个候选、按钮能不能用）
-      diag('双击已收到 | ' + snapshot())
-      // 正在录音 → 停止
+      // 官方录音条正开着 → 帮他停掉（不然两边都在录，他也不知道该按哪）
       if (recordingBar()) {
         const stop = stopButton()
-        if (stop) {
-          realClick(stop)
-          toast('⏹ 已停止听写，正在转写…')
-          // 转写要一点时间，等它把音频处理完再报数
-          // ★ 不要再拿固定延时去裁定「有没有」：
-          //   这个听写是**先录完再出字**，转写要跑几秒。
-          //   之前我用停止后 2.5 秒去读探针，结果误报「没抓到音频」，
-          //   把一次成功的转写判成了失败（2026-10-03 的教训）。
-          setTimeout(() => {
-            const r = window.__cdRec
-            const a = window.__cdAudio
-            const sd = window.__cdSend
-            const parts = []
-            parts.push('录音机=' + (!r ? '没记录' : (r.error ? r.error : (r.chunks + '块/' + Math.round(r.bytes / 1024) + 'KB'))))
-            parts.push('重采样=' + (!a ? '没走到' : (a.error ? a.error : (a.seconds + '秒/峰值' + a.peakDb + 'dB'))))
-            parts.push('发出=' + (!sd ? '没抓到' : (Math.round(sd.size / 1024) + 'KB@' + sd.at)))
-            diag('停止后｜' + parts.join(' | ') + '　（等 8 秒再看输入框）')
-          }, 4000)
-          return
-        }
-        toast('⚠️ 没找到「停止」按钮，请手动点一下')
-        return
+        if (stop) { realClick(stop); toast('⏹ 已停止官方录音，正在转写…'); return }
       }
-      // 空闲 → 开始
-      const mic = micButton()
-      if (!mic) {
-        toast('⚠️ 没找到麦克风按钮（这个界面版本可能不一样）')
-        return
-      }
-      if (mic.disabled) {
-        toast('⚠️ 麦克风现在不可用（语音模型可能还没装好）')
-        return
-      }
-      try {
-        realClick(mic)
-      } catch (e) {
-        diag('点击时抛异常：' + e)
-      }
-      // 点击后分三次探测：录音栏有没有出现？（诊断用，查完删）
-      const marks = []
-      ;[200, 600, 1400].forEach((ms, i, arr) => {
-        setTimeout(() => {
-          marks.push(ms + 'ms=' + (recordingBar() ? '在' : '无'))
-          if (i === arr.length - 1) diag('点击『开始录音』后 → ' + marks.join(' '))
-        }, ms)
-      })
-      toast('🎙 已开始听写，再双击 Control 结束')
+      if (live) stopRecording()
+      else beginRecording()
     }
 
     function onKeyDown(event) {
       const key = event.key
       if (key === 'Control' || key === 'ControlLeft' || key === 'ControlRight') {
         if (event.repeat) return
-        // ★ 2026-10-03 修：不再要求“焦点停在输入框里”。
-        //   录音栏一展开，焦点就离开输入框；原来的写法会把**第二次双击**
-        //   自己挡掉，结果就是“能开、停不下来”。
-        //   现在只要 DSH 窗口是前台（能收到 keydown 就说明是），双击就认。
         const now = Date.now()
-        if (broken) {
-          // 这一轮里按过别的键：把它当成新一轮的第一次
-          broken = false
-          lastCtrlAt = now
-          return
-        }
+        if (broken) { broken = false; lastCtrlAt = now; altPending = event.altKey; return }
         if (now - lastCtrlAt <= DOUBLE_TAP_MS) {
           lastCtrlAt = 0
-          if (tapTimer) {
-            clearTimeout(tapTimer)
-            tapTimer = null
-          }
-          handleToggle()
+          if (tapTimer) { clearTimeout(tapTimer); tapTimer = null }
+          handleToggle(altPending && event.altKey)
+          altPending = false
           return
         }
         lastCtrlAt = now
+        altPending = event.altKey
         if (tapTimer) clearTimeout(tapTimer)
-        tapTimer = setTimeout(() => {
-          lastCtrlAt = 0
-          tapTimer = null
-        }, DOUBLE_TAP_MS)
+        tapTimer = setTimeout(() => { lastCtrlAt = 0; tapTimer = null }, DOUBLE_TAP_MS)
         return
       }
-      // 别的键按下 → 打断「双击」判定（不阻止事件，正常打字）
       if (lastCtrlAt) broken = true
     }
 
     /* ============================ 装载 ============================ */
 
-    /** 把现场情况汇总成一行（诊断用）。 */
-    function snapshot() {
-      const cands = $$('button[class*="_trigger"]')
-      const mic = micButton()
-      const bar = recordingBar()
-      // aria-label / aria-haspopup 是判断「这个按钮现在点下去会干什么」的关键：
-      //   可用时 => aria-label=「开始听写」、没有 haspopup
-      //   不可用时 => aria-label=「语音输入尚未就绪」之类、haspopup=dialog（点它会弹安装引导）
-      const label = mic ? (mic.getAttribute('aria-label') || '(空)') : '-'
-      const popup = mic ? (mic.getAttribute('aria-haspopup') || '无') : '-'
-      const dis = mic ? (mic.disabled ? '禁用' : '未禁用') : '-'
-      const allLabels = cands.map((b) => b.getAttribute('aria-label') || '?').join(',')
-      return '候选=' + cands.length
-        + ' 锚点=' + $$('[class*="_triggerAnchor"]').length
-        + ' 选中=[' + label + ']/' + dis
-        + ' 弹窗=' + popup
-        + ' 录音栏=' + (bar ? '在' : '不在')
-        + ' 候选标签=' + allLabels
-    }
-
-    /**
-     * 探针（临时诊断）：语音输入插件在录音收尾时会把音频重采样成
-     * 16 kHz 单声道，那一步用 OfflineAudioContext.startRendering 完成。
-     * 这里量出它的产物：多长、多响、峰值多少 dB。
-     * 这样就能判断「送进识别器的到底是不是有声音的音频」。
-     */
-    /**
-     * 更靠前的一层探针：盯住录音机本身。
-     * 看它到底收没收到音频块、每块多大、录了多久。
-     * （上一版只盯了「重采样」那一步，结果什么都没抓到 —— 说明录音机这一环就没出数据。）
-     */
-    function installRecorderProbe() {
-      if (window.__cdRecProbe) return
-      window.__cdRecProbe = true
-      const Orig = window.MediaRecorder
-      if (!Orig) {
-        window.__cdRec = { error: '这个环境没有 MediaRecorder' }
-        return
-      }
-      function Patched(...args) {
-        const rec = new Orig(...args)
-        const info = { chunks: 0, bytes: 0, mime: '', ms: 0, events: 0 }
-        window.__cdRec = info
-        try { info.mime = rec.mimeType || '(未报)' } catch (e) { /* 忽略 */ }
-        rec.addEventListener('dataavailable', (ev) => {
-          info.events++
-          const size = (ev.data && ev.data.size) || 0
-          if (size > 0) { info.chunks++; info.bytes += size }
-        })
-        const t0 = Date.now()
-        const origStop = rec.stop.bind(rec)
-        rec.stop = function () {
-          info.ms = Date.now() - t0
-          return origStop()
-        }
-        return rec
-      }
-      Patched.prototype = Orig.prototype
-      if (Orig.isTypeSupported) Patched.isTypeSupported = Orig.isTypeSupported.bind(Orig)
-      window.MediaRecorder = Patched
-    }
-
-    /**
-     * 最外层的探针：盯住页面往外发的数据（音频要送到宿主去识别）。
-     * 只看大包（> 2 KB），记下大小和时间 —— 这样能判定「录音到底有没有发出去」。
-     * WebSocket 和 fetch 两条路都盯。
-     */
-    function installSendProbe() {
-      if (window.__cdSendProbe) return
-      window.__cdSendProbe = true
-      const stamp = () => new Date().toLocaleTimeString('zh-CN', { hour12: false })
-      const note = (size, kind) => {
-        if (size > 2000) window.__cdSend = { size: size, kind: kind, at: stamp() }
-      }
-      try {
-        const WS = window.WebSocket
-        if (WS && WS.prototype && typeof WS.prototype.send === 'function') {
-          const origSend = WS.prototype.send
-          WS.prototype.send = function (data) {
-            try {
-              const size = typeof data === 'string'
-                ? data.length
-                : ((data && data.byteLength) || (data && data.size) || 0)
-              note(size, typeof data === 'string' ? 'WebSocket文本' : 'WebSocket二进制')
-            } catch (e) { /* 忽略 */ }
-            return origSend.call(this, data)
-          }
-        }
-      } catch (e) { /* 忽略 */ }
-      try {
-        const origFetch = window.fetch
-        if (typeof origFetch === 'function') {
-          window.fetch = function (...args) {
-            try {
-              const body = args[1] && args[1].body
-              const size = body
-                ? (body.byteLength || body.size || String(body).length)
-                : 0
-              note(size, 'fetch')
-            } catch (e) { /* 忽略 */ }
-            return origFetch.apply(this, args)
-          }
-        }
-      } catch (e) { /* 忽略 */ }
-    }
-
-    function installAudioProbe() {
-      if (window.__cdAudioProbe) return
-      window.__cdAudioProbe = true
-      installRecorderProbe()
-      const proto = (window.OfflineAudioContext || window.webkitOfflineAudioContext || {}).prototype
-      if (!proto || typeof proto.startRendering !== 'function') {
-        window.__cdAudio = { error: '这个环境没有 OfflineAudioContext' }
-        return
-      }
-      const orig = proto.startRendering
-      proto.startRendering = async function (...args) {
-        const buffer = await orig.apply(this, args)
-        try {
-          const data = buffer.getChannelData(0)
-          let peak = 0
-          for (let i = 0; i < data.length; i++) {
-            const v = Math.abs(data[i])
-            if (v > peak) peak = v
-          }
-          window.__cdAudio = {
-            samples: data.length,
-            seconds: (data.length / buffer.sampleRate).toFixed(2),
-            rate: buffer.sampleRate,
-            channels: buffer.numberOfChannels,
-            peakDb: (20 * Math.log10(peak || 1e-8)).toFixed(1),
-          }
-        } catch (e) {
-          window.__cdAudio = { error: String(e) }
-        }
-        return buffer
-      }
-    }
-
     function start() {
       const styleEl = document.createElement('style')
       styleEl.textContent = CSS
       document.head.appendChild(styleEl)
-      // 探针已下线（功能已验证）。需要排查时把下面两行放回来。
-      // installAudioProbe()
-      // installSendProbe()
-
-      // 装载时自动报一次（临时诊断：确认插件到没到、按钮认不认得）。
-      // 1.5 秒是等界面把麦克风按钮渲染出来；一次性定时器，不是轮询。
-      setTimeout(() => {
-        try { diag('插件已加载 v3 | ' + snapshot()) } catch (e) { /* 诊断失败不影响主功能 */ }
-      }, 1500)
-
-      // 捕获阶段监听：即使焦点在编辑器里，事件也会先经过 window。
       window.addEventListener('keydown', onKeyDown, true)
-
+      // 装载时报一次现场：输入框认得哪个、录音设备在不在
+      setTimeout(() => {
+        diag('dictation-turbo v4 就绪｜麦克风=' + (canRecord() ? '可用' : '不可用'))
+        selfCheck(false)
+      }, 1500)
       return () => {
         window.removeEventListener('keydown', onKeyDown, true)
         if (tapTimer) clearTimeout(tapTimer)
         if (toastTimer) clearTimeout(toastTimer)
         if (toastEl) toastEl.remove()
+        if (diagEl) diagEl.remove()
+        hideRecBar()
         toastEl = null
+        diagEl = null
         styleEl.remove()
       }
     }
@@ -462,7 +723,7 @@ window.__ModuleLoader__.load({
     exports.inject = []
     exports.apply = (ctx) => {
       if (ctx && typeof ctx.effect === 'function') {
-        ctx.effect(() => start(), 'dsh-ctrl-dictate: 双击 Control 听写')
+        ctx.effect(() => start(), 'dictation-turbo: 双击 Control 听写（双引擎）')
       } else {
         start()
       }
