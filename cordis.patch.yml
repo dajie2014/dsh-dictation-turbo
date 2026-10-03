@@ -1,0 +1,5 @@
+# dsh-ctrl-dictate：把「双击 Control 键 = 点一下语音输入麦克风」装进来。
+# 纯客户端插件：宿主侧不注册任何服务，全部逻辑在 ./client.js（浏览器半体）。
+- insert:
+    - id: dictation-turbo
+      name: 'dictation-turbo'
