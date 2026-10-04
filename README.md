@@ -4,6 +4,8 @@
 
 给 DSH（DeepSeek Harness）用：在它的窗口里，用说的代替打字。
 
+**中文** · [English](#dictation-turbo-english)
+
 ---
 
 ## 为什么值得用
@@ -111,3 +113,115 @@ VoiceStudio 是个本机服务（默认 `http://127.0.0.1:3900`）。要跨源�
 ## 许可
 
 MIT · 作者 Jie Da
+
+---
+---
+
+# Dictation Turbo (English)
+
+**Double-tap Control and speak — the words land in the input box. Chinese, German and English, with no input-method switching.**
+
+A plugin for DSH (DeepSeek Harness): dictate instead of typing in its window.
+
+**English** · [中文](#dictation-turbo)
+
+---
+
+## Why it is worth using
+
+### 1. No input-method switching
+
+Speak Chinese, German or English — you never switch input methods (no ⌘Space dance).
+Speech becomes text directly; this path never goes through an IME at all.
+
+It shows most clearly if you mix languages: one sentence in Chinese, the next in German, with no switching action in between.
+
+### 2. It works out the language itself
+
+Two ears listen at the same time:
+
+| You speak | Who listens | Why |
+|---|---|---|
+| Chinese / English | DSH's built-in recognizer (SenseVoice) | Better Chinese: simplified characters, full-width punctuation |
+| German and 600+ other languages | Local VoiceStudio | DSH's model never learned German |
+
+The split is automatic: the audio goes to VoiceStudio first (it detects the language itself); if it comes back as Chinese, DSH listens again; if either side is unavailable, the other takes over. There is no "pick a language" step.
+
+> VoiceStudio is **optional**. Without it everything still works — Chinese and English only.
+> With it, German and other long-tail languages come into reach.
+
+### 3. Built for people who dictate — including people who cannot see the screen
+
+The whole interaction is reduced to one gesture:
+
+- **Double-tap Control** → start speaking (a soft click)
+- **Double-tap Control again** → stop; the text lands in the input box (another soft click)
+
+No hunting for a button on screen, no mouse, and no need to click into the input box first — "go click that microphone" is exactly the step that is worst for someone who cannot see it.
+State is carried by sound: one beep starts recording, one beep ends it, and a different pitch means something needs your attention.
+
+---
+
+## Usage
+
+| Action | Result |
+|---|---|
+| Double-tap Control | Start recording (red dot + timer + level meter in the bottom-right corner) |
+| Double-tap Control again | Stop, recognize, insert the text into the input box |
+| **Option + double-tap Control** | **Self-check**: verifies the input box is reachable and both recognizers answer |
+
+**Silence is never sent to the recognizer**: if nothing was heard, it says so instead of guessing a random sentence — one of the main sources of "dictation is terrible".
+
+## Installation
+
+1. Put this repository anywhere on your machine, e.g. `~/dsh-dictation-turbo`
+
+2. Edit `~/.dsh/profiles/desktop/package.json` and add two things:
+
+   ```json
+   {
+     "dependencies": {
+       "dictation-turbo": "file:/your/path/dsh-dictation-turbo"
+     },
+     "dsh": {
+       "profile": {
+         "bundles": ["dictation-turbo"]
+       }
+     }
+   }
+   ```
+
+3. Install dependencies — ⚠️ **`--no-frozen-lockfile` is required**:
+
+   ```sh
+   cd ~/.dsh/profiles/desktop
+   pnpm install --no-frozen-lockfile
+   ```
+
+   ⚠️ A plain `pnpm install` hits a lockfile mismatch and **wipes the entire `node_modules` first**, taking every other plugin you installed down with it.
+
+4. Restart DSH. After that, edits to `client.js` need only a **page refresh (⌘R)**.
+
+### One more step for German
+
+VoiceStudio is a local service (default `http://127.0.0.1:3900`). To reach it across origins, add **`dsh-app://app`** to its allowed origins — that is the real origin of the DSH page (**an Electron private protocol, not the address in the browser bar**; the one in the address bar will not work).
+
+## How it relates to DSH's built-in voice input
+
+The built-in feature is "click the microphone button in the UI", and recognition uses DSH's own engine.
+
+This plugin records by itself, picks the engine itself and inserts the text itself — which is what makes possible the thing the built-in one cannot do: **the same sentence, with the engine chosen by language**.
+(It also does not depend on what the UI button looks like, so DSH redesigns are unlikely to break it.)
+
+If you want to dictate in **any application** (not just the DSH window), that is a different build.
+
+## Known limitations
+
+- **Works only inside the DSH window.**
+- **DSH must be running** — the recognition engines live inside it.
+- Chinese / English need only DSH; **German also needs VoiceStudio running**.
+- The plugin ships no model of its own; **which languages you can use depends on those two engines**.
+
+## License
+
+MIT · by Jie Da
