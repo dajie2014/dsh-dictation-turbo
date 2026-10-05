@@ -112,24 +112,44 @@ window.__ModuleLoader__.load({
 
     /**
      * 轻提示音。为什么要有：靠听写输入的人（尤其看不见屏幕的）没法盯着右下角那条小字，
-     * 得靠声音知道"开始录了 / 结束了 / 没成"。三个音高各不相同。
+     * 得靠声音知道"开始录了 / 结束了 / 没成"。
+     *
+     * 三个音的音高是定死的，**和 Mac 全系统版那三个完全一致**（两个版本听起来才是同一个东西）：
+     *   开始 C6(1046.5) ／ 结束 C5(523.25) —— 同一个音名、低一个八度，不用比较就能分；
+     *   不顺 F#5(740) —— 对 C 调来说是个三全音，听着就"不对劲"。
+     *
+     * 另外两处是按实测改的（2026-10-05，用户反馈"有一个比较微弱、吵一点就不好辨认"）：
+     *   ① 音量 0.06 → 0.22 —— 原来太轻，这是"微弱"的主要来源；
+     *   ② 纯正弦 → 基音 + 两个泛音、响 0.30 秒 —— 纯正弦太单薄，小喇叭上一散就没。
      */
     function chime(kind) {
       try {
         const AC = window.AudioContext || window.webkitAudioContext
         if (!AC) return
         const ac = new AC()
-        const osc = ac.createOscillator()
-        const gain = ac.createGain()
-        osc.type = 'sine'
-        osc.frequency.value = kind === 'start' ? 880 : (kind === 'ok' ? 660 : 320)
-        gain.gain.value = 0.06
-        osc.connect(gain)
-        gain.connect(ac.destination)
-        osc.start()
-        gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.12)
-        osc.stop(ac.currentTime + 0.15)
-        setTimeout(() => { try { ac.close() } catch (e) { /* 忽略 */ } }, 500)
+        const base = kind === 'start' ? 1046.5 : (kind === 'ok' ? 523.25 : 739.99)
+        const out = ac.createGain()
+        out.connect(ac.destination)
+        const t0 = ac.currentTime
+        // 结束那个是低八度（C5），人耳对低频不敏感 —— 同样电平听起来就是轻一档。
+        // 所以它单独给更大的音量、稍长的尾巴（用户反馈：「低的 C 再大声一些」）。
+        const VOL = kind === 'ok' ? 0.32 : 0.22
+        const DUR = kind === 'ok' ? 0.35 : 0.30
+        // 基音 + 八度泛音 + 十二度泛音：比纯正弦"实"，更像一声"叮"
+        for (const [mult, amp] of [[1, 1.0], [2, 0.30], [3, 0.12]]) {
+          const osc = ac.createOscillator()
+          const g = ac.createGain()
+          osc.type = 'sine'
+          osc.frequency.value = base * mult
+          g.gain.value = amp
+          osc.connect(g)
+          g.connect(out)
+          osc.start(t0)
+          osc.stop(t0 + DUR)
+        }
+        out.gain.setValueAtTime(VOL, t0)
+        out.gain.exponentialRampToValueAtTime(0.0004, t0 + DUR)
+        setTimeout(() => { try { ac.close() } catch (e) { /* 忽略 */ } }, 700)
       } catch (e) { /* 忽略 */ }
     }
 
