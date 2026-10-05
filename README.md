@@ -68,6 +68,9 @@
 
 1. 把这个仓库放到本地任意位置，例如 `~/dsh-dictation-turbo`
 
+   > **下载卡在 0% 不动？** 国内网络常见。
+   > **换这条备用直链**：<https://cdn.jsdelivr.net/gh/dajie2014/dsh-dictation-turbo@main/dist/dsh-dictation-turbo-0.2.1.zip>
+
 2. 编辑 `~/.dsh/profiles/desktop/package.json`，加两处：
 
    ```json
