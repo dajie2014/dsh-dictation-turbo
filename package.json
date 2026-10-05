@@ -1,6 +1,6 @@
 {
   "name": "dictation-turbo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "双击 Control 说话，文字落进 DSH 输入框；中文/德语/英文自动换引擎，不用切输入法",
   "author": "Jie Da",
   "type": "module",
