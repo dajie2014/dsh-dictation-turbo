@@ -77,7 +77,7 @@
 1. 把这个仓库放到本地任意位置，例如 `~/dsh-dictation-turbo`
 
    > **下载卡在 0% 不动？** 国内网络常见。
-   > **换这条备用直链**：<https://cdn.jsdelivr.net/gh/dajie2014/dsh-dictation-turbo@main/dist/dsh-dictation-turbo-0.2.1.zip>
+   > **换这条备用直链**：<https://cdn.jsdelivr.net/gh/dajie2014/dsh-dictation-turbo@main/dist/dsh-dictation-turbo-0.2.2.zip>
 
 2. 编辑 `~/.dsh/profiles/desktop/package.json`，加两处：
 
@@ -153,7 +153,7 @@ A plugin for DSH (DeepSeek Harness): dictate instead of typing in its window.
 > **Chinese and English are built in.** With DSH installed and running, it hears both —
 > there is nothing else to install.
 >
-> VoiceStudio is only a **second ear**, there for German (and 600+ other languages).
+> VoiceStudio is only a **second ear**, there for German (plus 25 European languages in total).
 > **If you do not need German, skip it — nothing else is missing.**
 >
 > **And it is free if you do want it** — VoiceStudio is free, open-source software
@@ -184,13 +184,13 @@ Two ears listen at the same time:
 | You speak | Who listens | Why |
 |---|---|---|
 | **Chinese / English** | DSH's built-in recognizer (SenseVoice) | **Nothing to install**; better Chinese: simplified characters, full-width punctuation |
-| German and 600+ other languages (**optional**) | Local VoiceStudio (**free, open source**) | DSH's model never learned German; **only needed for German — and it costs nothing** |
+| German + 24 other European languages (**optional**) | Local VoiceStudio (**free, open source**) | DSH's model never learned German; **only needed for German — and it costs nothing** |
 
-The split is automatic: the audio goes to VoiceStudio first (it detects the language itself); if it comes back as Chinese, DSH listens again; if either side is unavailable, the other takes over. There is no "pick a language" step.
+The split is automatic: the audio goes to DSH first; if what comes back doesn't look Chinese, VoiceStudio listens instead. There is no "pick a language" step.
 
 > **Again: VoiceStudio is an optional extra, not a prerequisite — and it is free.** Without it, Chinese
-> and English work exactly the same — the only thing you lose is German and other
-> long-tail languages. Nothing else is missing.
+> and English work exactly the same — the only thing you lose is German and the other
+> European languages. Nothing else is missing.
 
 ### 3. Built for people who dictate — including people who cannot see the screen
 
