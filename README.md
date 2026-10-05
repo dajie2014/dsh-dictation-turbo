@@ -11,6 +11,10 @@
 >
 > VoiceStudio 只是**多加的一只耳朵**，专门用来听德语（以及另外 600 多种语言）。
 > **用不上德语的人，不用装它，功能一样完整。**
+>
+> **要装它也是免费的** —— VoiceStudio 是免费的开源软件（AGPL-3.0），
+> 不用花钱、不用订阅。**这个插件和它两个都不要钱。**
+> 这里没有"想加个功能就得再买什么软件"这回事。
 
 **中文** · [English](#dictation-turbo-english)
 
@@ -32,12 +36,12 @@
 | 你说的 | 谁来听 | 为什么 |
 |---|---|---|
 | **中文 / 英文** | DSH 自带的识别（SenseVoice） | **不用装任何东西**；中文更准：简体、全角标点 |
-| 德语及另外 600 多种（**可选**） | 本机 VoiceStudio | DSH 那个模型没学过德语；**要德语才需要它** |
+| 德语及另外 600 多种（**可选**） | 本机 VoiceStudio（**免费开源**） | DSH 那个模型没学过德语；**要德语才需要它，它不要钱** |
 
 分工是自动的：先把音频交给 VoiceStudio（它自带语言检测），听出来是**中文**，
 就换 DSH 再听一遍；任何一边没接上，另一边顶上。**没有"选语言"这个动作。**
 
-> **再强调一次：VoiceStudio 是可选件，不是前提。** 没装它，中文和英文照样用，
+> **再强调一次：VoiceStudio 是可选件，不是前提，而且它是免费的。** 没装它，中文和英文照样用，
 > 只是德语等长尾语言走不通 —— 就这么点区别，别的什么都不缺。
 
 ### 3. 靠听写输入的人（包括看不见屏幕的人）
@@ -98,10 +102,13 @@
 
 4. 重启 DSH。之后改 `client.js` 只要**刷新页面（⌘R）**就生效。
 
-### 只有想要德语的人，才需要这一步
+### 只有想要德语的人，才需要这一步（**免费**）
 
 **上面四步做完，中文和英文就已经能用了** —— 打开 DSH，双击 Control 说句话就成，
 不用再配任何东西。下面这一小段是**可选**的。
+
+> **VoiceStudio 不要钱。** 它是免费的开源软件（AGPL-3.0）：下载、安装、使用
+> 都不收费，也没有订阅或"高级版"。这一节要买的软件是零个。
 
 VoiceStudio 是个本机服务（默认 `http://127.0.0.1:3900`）。要跨源访问它，
 得让它的允许来源里有 **`dsh-app://app`** —— 这是 DSH 页面的真实来源
@@ -121,7 +128,7 @@ VoiceStudio 是个本机服务（默认 `http://127.0.0.1:3900`）。要跨源�
 
 - **只在 DSH 窗口里有效**。
 - **DSH 必须开着** —— 识别引擎住在它里面。
-- **中文 / 英文只要 DSH 就够了**；德语另需 VoiceStudio 也在跑（**可选，不装不影响中英文**）。
+- **中文 / 英文只要 DSH 就够了**；德语另需 VoiceStudio 也在跑（**可选、免费，不装不影响中英文**）。
 - 本插件自己不带模型，**能听哪些语言取决于上面这两个引擎**。
 
 ## 许可
@@ -144,6 +151,10 @@ A plugin for DSH (DeepSeek Harness): dictate instead of typing in its window.
 >
 > VoiceStudio is only a **second ear**, there for German (and 600+ other languages).
 > **If you do not need German, skip it — nothing else is missing.**
+>
+> **And it is free if you do want it** — VoiceStudio is free, open-source software
+> (AGPL-3.0): nothing to buy, no subscription. **Both pieces are free.**
+> There is no "buy another program to unlock a feature" here.
 
 **English** · [中文](#dictation-turbo)
 
@@ -165,11 +176,11 @@ Two ears listen at the same time:
 | You speak | Who listens | Why |
 |---|---|---|
 | **Chinese / English** | DSH's built-in recognizer (SenseVoice) | **Nothing to install**; better Chinese: simplified characters, full-width punctuation |
-| German and 600+ other languages (**optional**) | Local VoiceStudio | DSH's model never learned German; **only needed for German** |
+| German and 600+ other languages (**optional**) | Local VoiceStudio (**free, open source**) | DSH's model never learned German; **only needed for German — and it costs nothing** |
 
 The split is automatic: the audio goes to VoiceStudio first (it detects the language itself); if it comes back as Chinese, DSH listens again; if either side is unavailable, the other takes over. There is no "pick a language" step.
 
-> **Again: VoiceStudio is an optional extra, not a prerequisite.** Without it, Chinese
+> **Again: VoiceStudio is an optional extra, not a prerequisite — and it is free.** Without it, Chinese
 > and English work exactly the same — the only thing you lose is German and other
 > long-tail languages. Nothing else is missing.
 
@@ -225,9 +236,11 @@ State is carried by sound: one beep starts recording, one beep ends it, and a di
 
 4. Restart DSH. After that, edits to `client.js` need only a **page refresh (⌘R)**.
 
-### Only needed if you want German
+### Only needed if you want German (**and it is free**)
 
 **After the four steps above, Chinese and English already work** — open DSH, double-tap Control and speak. Nothing else to configure. The rest of this section is **optional**.
+
+> **VoiceStudio costs nothing.** It is free, open-source software (AGPL-3.0): no purchase, no subscription, no "pro" edition. The number of programs you have to buy for this section is zero.
 
 VoiceStudio is a local service (default `http://127.0.0.1:3900`). To reach it across origins, add **`dsh-app://app`** to its allowed origins — that is the real origin of the DSH page (**an Electron private protocol, not the address in the browser bar**; the one in the address bar will not work).
 
@@ -244,7 +257,7 @@ If you want to dictate in **any application** (not just the DSH window), that is
 
 - **Works only inside the DSH window.**
 - **DSH must be running** — the recognition engines live inside it.
-- **Chinese / English need only DSH**; German also needs VoiceStudio running (**optional — skipping it costs you nothing in Chinese or English**).
+- **Chinese / English need only DSH**; German also needs VoiceStudio running (**optional and free — skipping it costs you nothing in Chinese or English**).
 - The plugin ships no model of its own; **which languages you can use depends on those two engines**.
 
 ## License
