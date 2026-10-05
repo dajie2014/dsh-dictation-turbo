@@ -11,8 +11,10 @@
  * 两只耳朵：
  *   · 中英 → DSH 自己的 SenseVoice（简体、全角标点，中文更准）
  *   · 德语及其余长尾 → VoiceStudio（本机 3900，646 种语言）
- *   怎么分工：先让 VoiceStudio 听（它自带语言检测），听出来是中文就换 DSH 重听一遍。
- *   为什么不能反过来：SenseVoice 不认识德语时**不报错**，而是硬猜成中文或英文。
+ *   怎么分工：先让 DSH 听（中文最准，简体 + 全角标点），听着不像中文再交 VoiceStudio 重听。
+ *   为什么必须是这个顺序：VoiceStudio 的听写模型是 Parakeet v3，德语/英语更准，
+ *   但它**不认中文** —— 中文先经它一过就变成一串拉丁字母，判据认不出"这是中文"，
+ *   中文就废了。反过来 SenseVoice 不认识德语时也不报错、会硬猜，所以判据两边都得有。
  *
  * 与前几版的关系：
  *   v3 只是"替鼠标去点官方的麦克风按钮"，引擎是官方那一个（SenseVoice，只认 5 种语言）。
@@ -398,9 +400,23 @@ window.__ModuleLoader__.load({
       return han / letters > 0.4
     }
 
-    /** 先 VoiceStudio 探语言：中文 → 换 DSH 重听；其他 → 就用 VoiceStudio。 */
+    /** 先问 DSH：它中文最准（简体 + 全角标点）。
+     *  结果像中文就直接用；不像中文（多半是德语/英语）→ 交 VoiceStudio 重听。
+     *
+     *  ⚠️ 顺序不能反过来（2026-10-05 改）：VoiceStudio 听写用的那只模型
+     *  不认中文，中文灌进去会吐一串拉丁字母 —— 那边判不出"这是中文"，中文就废了。
+     *  全系统版（Engines.swift）一直是这个顺序，两边现在一致。 */
     async function route(wav) {
       const notes = []
+      let dshText = ''
+      try {
+        const d = await askDSH(wav)
+        dshText = (d.text || '').trim()
+      } catch (e) {
+        notes.push('DSH: ' + (e && e.message ? e.message : e))
+      }
+      if (dshText && looksChinese(dshText)) return { text: dshText, who: 'DSH', notes }
+
       let vs = null
       try {
         vs = await askVoiceStudio(wav)
@@ -408,26 +424,17 @@ window.__ModuleLoader__.load({
         notes.push('VoiceStudio: ' + (e && e.message ? e.message : e))
       }
       const vsText = vs && vs.text ? vs.text.trim() : ''
-      if (!vsText) notes.push(vs ? 'VoiceStudio 听出空结果' : 'VoiceStudio 没接上')
-      if (vsText && looksChinese(vsText)) {
-        try {
-          const d = await askDSH(wav)
-          const t = (d.text || '').trim()
-          if (t) return { text: t, who: 'DSH', notes }
-        } catch (e) {
-          notes.push('DSH: ' + (e && e.message ? e.message : e))
+      if (vsText) {
+        return {
+          text: vsText,
+          who: dshText ? 'VoiceStudio（DSH 听着不像中文）' : 'VoiceStudio',
+          lang: vs.lang,
+          notes,
         }
-        return { text: vsText, who: 'VoiceStudio（DSH 没接上）', lang: vs.lang, notes }
       }
-      if (vsText) return { text: vsText, who: 'VoiceStudio', lang: vs.lang, notes }
-      // VoiceStudio 没开或没结果 → 全交给 DSH
-      try {
-        const d = await askDSH(wav)
-        return { text: (d.text || '').trim(), who: 'DSH', notes }
-      } catch (e) {
-        notes.push('DSH: ' + (e && e.message ? e.message : e))
-        throw new Error(notes.join(' ｜ '))
-      }
+      if (dshText) return { text: dshText, who: 'DSH（VoiceStudio 没接上）', notes }
+      notes.push(vs ? 'VoiceStudio 听出空结果' : 'VoiceStudio 没接上')
+      throw new Error(notes.join(' ｜ '))
     }
 
     /* ============================ 把字落进输入框 ============================ */
