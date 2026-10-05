@@ -27,7 +27,11 @@
 说中文、说德语、说英文，**不必在输入法之间来回切**（不用 ⌘空格 去翻那个语言）。
 语音直接就变成文字了 —— 这条路**根本不经过输入法**。
 
-混着说几种语言的人感觉最明显：一句中文、一句德语，中间**没有任何切换动作**。
+几种语言换着说的人感觉最明显：**一句中文、一句德语，接着往下说，中间没有任何切换动作**。
+
+> ⚠️ **有一条我们做不到，先说清楚**：**一句话里夹着两种语言**（中文句子里夹一个德语词），
+> 现在市面上的识别引擎都认不出来 —— 它们整句只判**一种**语言，夹进来的那个词会被丢掉或听岔。
+> 要夹着说的地方，**在换语言的位置稍微顿一下**，它就能认对。
 
 ### 2. 说哪种语言，它自己判断
 
@@ -167,7 +171,11 @@ A plugin for DSH (DeepSeek Harness): dictate instead of typing in its window.
 Speak Chinese, German or English — you never switch input methods (no ⌘Space dance).
 Speech becomes text directly; this path never goes through an IME at all.
 
-It shows most clearly if you mix languages: one sentence in Chinese, the next in German, with no switching action in between.
+It shows most clearly when you switch languages: one sentence in Chinese, the next in German, with no switching action in between.
+
+> ⚠️ **One thing it cannot do**: mixing two languages *inside* one sentence (a German word dropped into a
+> Chinese sentence). Every engine we tested judges a single language per take and drops or mangles the odd
+> word out — even the much larger models. Pause briefly where you switch, and it comes out right.
 
 ### 2. It works out the language itself
 
