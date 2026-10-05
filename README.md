@@ -184,7 +184,7 @@ Two ears listen at the same time:
 | You speak | Who listens | Why |
 |---|---|---|
 | **Chinese / English** | DSH's built-in recognizer (SenseVoice) | **Nothing to install**; better Chinese: simplified characters, full-width punctuation |
-| German + 24 other European languages (**optional**) | Local VoiceStudio (**free, open source**) | DSH's model never learned German; **only needed for German — and it costs nothing** |
+| German + 17 other European languages (**optional**) | Local VoiceStudio (**free, open source**) | DSH's model never learned German; **only needed for German — and it costs nothing** |
 
 The split is automatic: the audio goes to DSH first; if what comes back doesn't look Chinese, VoiceStudio listens instead. There is no "pick a language" step.
 
