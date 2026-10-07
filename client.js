@@ -36,7 +36,7 @@ window.__ModuleLoader__.load({
     /** 最短录音：比这短当误触丢掉。 */
     const MIN_SECONDS = 0.35
     /** 全程最响都没到这个音量，就不送识别（静音送进去一定会被硬猜出东西）。 */
-    const MIN_PEAK = 0.02
+    const MIN_PEAK = 0.01
     /** 最长录这么久强制收工（秒）。 */
     const MAX_SECONDS = 120
     /** 送识别一律 16 kHz 单声道 —— DSH 那个接口只收这种。 */
@@ -208,18 +208,41 @@ window.__ModuleLoader__.load({
       return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)
     }
 
+    /* 挑麦克风：优先 Focusrite/Scarlett，避开虚拟声卡。
+       Chromium 的"默认设备"可能落到虚拟声卡上（Oray 之类），录出来永远是纯静音，
+       表现就是诊断条里的「没听到声音（峰值 0.000）」。 */
+    async function pickMicId() {
+      try {
+        const list = await navigator.mediaDevices.enumerateDevices()
+        const mics = list.filter((d) => d.kind === 'audioinput')
+        if (!mics.length) return null
+        const named = mics.filter((d) => (d.label || '').trim())
+        const pool = named.length ? named : mics
+        const hit = pool.find((d) => /scarlett|focusrite/i.test(d.label))
+        if (hit) return hit.deviceId
+        const real = pool.find((d) => !/oray|virtual|blackhole|soundflower|loopback|aggregate/i.test(d.label))
+        return (real || pool[0]).deviceId
+      } catch (e) {
+        return null
+      }
+    }
+
     async function beginRecording() {
       if (live) return
       if (!canRecord()) { toast('⚠️ 这个环境不支持录音'); return }
       // 先响再开录：这一声要是被自己录进去，偶尔会被识别成莫名其妙的字
       chime('start')
       await sleep(180)
+      // 浏览器自带的消回声/压噪对小声特别狠，会把话筒信号削掉一大截 —— 关掉，
+      // 让原始信号原样送识别（全系统版没有这些处理，信号一直更饱满）。
+      const baseAudio = { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      const micId = await pickMicId()
       let stream
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           // autoGainControl 关掉：它会把小声放大到贴顶（诊断里的"峰值 1.00"就是这么来的），
           // 削波会伤识别。全系统版没这个处理，录出来的峰值一直很温和。
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+          audio: micId ? Object.assign({}, baseAudio, { deviceId: { exact: micId } }) : baseAudio,
         })
       } catch (e) {
         toast('⚠️ 拿不到麦克风：' + (e && e.message ? e.message : e))
@@ -244,6 +267,11 @@ window.__ModuleLoader__.load({
       analyser.fftSize = 1024
       src.connect(analyser)
       const buf = new Float32Array(analyser.fftSize)
+
+      try {
+        const tr = stream.getAudioTracks()[0]
+        if (tr) diag('🎙 麦克风：' + (tr.label || '（无名）'))
+      } catch (e) { /* 忽略 */ }
 
       live = { rec, stream, chunks, t0: Date.now(), ac, analyser, peak: 0 }
       showRecBar()
